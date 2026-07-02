@@ -555,7 +555,7 @@ def post_to_instagram(image_url: str, caption: str) -> str | None:
         pub = requests.post(
             f"https://graph.facebook.com/v25.0/{INSTAGRAM_ACCOUNT_ID}/media_publish",
             data={"creation_id": container_id, "access_token": INSTAGRAM_TOKEN},
-            timeout=15
+            timeout=60
         )
         media_id = pub.json().get("id")
         if media_id:
@@ -1255,7 +1255,7 @@ def post_reel(video_url: str, caption: str) -> str | None:
         pub = requests.post(
             f"https://graph.facebook.com/v25.0/{INSTAGRAM_ACCOUNT_ID}/media_publish",
             data={"creation_id": container_id, "access_token": INSTAGRAM_TOKEN},
-            timeout=15
+            timeout=60
         )
         media_id = pub.json().get("id")
         if not media_id:
