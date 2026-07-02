@@ -1022,14 +1022,13 @@ def process_reel(video_path: str, headline: str, summary: str,
             except Exception:
                 reel_dur = 30.0
 
-        # Step 1b: Video → 1080x1920, hold last frame to match audio
+        # Step 1b: Video → 1080x1920, loop to match audio duration
         vf_main = (
             "scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,"
-            "tpad=stop=-1:stop_mode=clone"
+            "crop=1080:1920"
         )
         crop = subprocess.run([
-            "ffmpeg", "-y", "-i", video_path,
+            "ffmpeg", "-y", "-stream_loop", "-1", "-i", video_path,
             "-t", str(reel_dur),
             "-vf", vf_main, "-r", "30",
             "-c:v", "libx264", "-profile:v", "high", "-level:v", "4.0",
@@ -1044,10 +1043,10 @@ def process_reel(video_path: str, headline: str, summary: str,
                 "crop=1080:1920,boxblur=30:3[bg_blur];"
                 "[fg]scale=1080:608:force_original_aspect_ratio=decrease,"
                 "pad=1080:608:(ow-iw)/2:(oh-ih)/2:black[fg_pad];"
-                "[bg_blur][fg_pad]overlay=(W-w)/2:(H-h)/2,tpad=stop=-1:stop_mode=clone"
+                "[bg_blur][fg_pad]overlay=(W-w)/2:(H-h)/2"
             )
             crop = subprocess.run([
-                "ffmpeg", "-y", "-i", video_path,
+                "ffmpeg", "-y", "-stream_loop", "-1", "-i", video_path,
                 "-t", str(reel_dur), "-vf", vf_blur, "-r", "30",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
                 "-an", "-preset", "fast", "-crf", "22",
