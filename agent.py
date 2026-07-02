@@ -214,10 +214,10 @@ def fetch_ndtv_sports() -> list[dict]:
     return _parse_rss("https://sports.ndtv.com/rss/all", "NDTV Sports", 3)
 
 def fetch_espncricinfo() -> list[dict]:
-    return _parse_rss("https://www.espncricinfo.com/rss/content/story/feeds/0.xml", "ESPNcricinfo", 3)
+    return _parse_rss("https://www.espncricinfo.com/rss/content/story/feeds/6.xml", "ESPNcricinfo", 3)
 
 def fetch_skysports() -> list[dict]:
-    return _parse_rss("https://www.skysports.com/rss/12040", "Sky Sports", 2)
+    return _parse_rss("https://www.skysports.com/rss/0,20514,11661,00.xml", "Sky Sports", 2)
 
 def fetch_goal_football() -> list[dict]:
     return _parse_rss("https://www.goal.com/feeds/en/news", "Goal.com Football", 2)
@@ -370,6 +370,13 @@ TOP {count} choose karo. JSON:
 def generate_caption(news_item: dict) -> dict:
     print(f"\n[Caption] Generate kar raha hoon...")
     client = Groq(api_key=GROQ_API_KEY)
+    import random as _rand
+    caption_styles = [
+        "LIVE COMMENTARY: Jaise match abhi chal raha ho — real-time energy. 'Aur woh shot!', 'Crowd ki saans ruki hui hai...', 'Ye moment history mein darz ho gaya!'",
+        "PLAYER LEGEND: Player ko legend ki tarah present karo — unki struggle, dedication, sacrifice. Emotional connection banao fans ke saath.",
+        "STAT ATTACK: Ek mind-blowing stat ya record se shuru karo jo log nahi jaante. 'Kya tum jaante ho ki...?' Phir poora context do.",
+    ]
+    chosen_style = _rand.choice(caption_styles)
     prompt = f"""
 Tu {CHANNEL_HANDLE} ka Instagram content creator hai — ye ek SPORTS channel hai.
 
@@ -378,13 +385,12 @@ Title: {news_item.get('title', '')}
 Description: {news_item.get('body', '')[:500]}
 Source: {news_item.get('source', '')}
 
-TONE — SPORTS COMMENTATOR, EXCITING:
-- Ek passionate sports commentator ki tarah likho
-- "Kya shot tha!", "History ban gayi!", "Ye moment yaad rahega!"
-- Readers ko feel ho ki match abhi chal raha hai — real-time energy
+CAPTION STYLE THIS POST: {chosen_style}
+
+RULES:
 - Hindi+English mix (Hinglish), young Indian sports fans ke liye
 - 6-8 lines, exciting but factual
-- End mein ek bold prediction ya trivia fact
+- End mein ek bold prediction ya call-to-action
 - CAPTION MEIN HASHTAG NAHI — sirf "hashtags" field mein
 
 JSON:
@@ -829,12 +835,19 @@ def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") ->
         if path:
             return path, keyword
 
-    # 2. Pexels — best keyword-to-footage relevance
+    # 2. Pexels — best keyword-to-footage relevance, smart retry with simpler keywords
     if PEXELS_API_KEY:
-        print(f"      Trying Pexels...")
-        path, title = fetch_pexels_video(keyword)
-        if path:
-            return path, title or keyword
+        words = keyword.split()
+        pexels_attempts = [keyword]
+        if len(words) > 2:
+            pexels_attempts.append(" ".join(words[:2]))   # first 2 words
+        if len(words) > 1:
+            pexels_attempts.append(words[0])              # just sport type
+        for kw in pexels_attempts:
+            print(f"      Trying Pexels: '{kw}'")
+            path, title = fetch_pexels_video(kw)
+            if path:
+                return path, title or kw
 
     # 3. Pixabay — CC0 sports stock
     if PIXABAY_API_KEY:
@@ -871,22 +884,18 @@ def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") ->
 # --- Narration Generation -----------------------------------------------------
 def generate_narration(news_item: dict, headline: str, summary: str,
                        video_topic: str = "") -> str:
-    """Sports commentary narration — Hindi, energetic, 30-45 seconds"""
+    """Sports commentary narration — news story pe focused, video sirf background"""
     source = news_item.get("source", "")
     title  = news_item.get("title", "")
     body   = news_item.get("body", "")[:500]
 
-    if video_topic and video_topic not in ("sports action match", ""):
-        visual_context = (
-            f"\nVIDEO MEIN KYA DIKH RAHA HAI: '{video_topic}'\n"
-            f"Narration ISKO describe kare — viewer yahi dekh raha hai screen pe.\n"
-            f"Sport ke action ko describe karo — jo video mein ho raha hai.\n"
-        )
-    else:
-        visual_context = (
-            "\nVideo mein sports action footage hai.\n"
-            "Narration mein sports energy aur excitement capture karo.\n"
-        )
+    import random as _rand
+    narration_styles = [
+        "MATCH MOMENT: Seedha action mein jump karo — jaise live commentary chal rahi ho. 'Aur woh shot!', 'Ye moment history mein...'",
+        "PLAYER STORY: Player ki journey aur struggle pe focus karo — ek insaan ki kahani jo champion bana.",
+        "STAT BOMB: Ek shocking record ya fact se shuru karo, phir context do — listeners ka jaw drop ho jaye.",
+    ]
+    chosen_style = _rand.choice(narration_styles)
 
     try:
         client = Groq(api_key=GROQ_API_KEY)
@@ -900,13 +909,14 @@ Ek 30-second sports Reel narration likho — energetic, dramatic, awe-inspiring.
 News Topic: {title}
 Details: {body}
 Summary: {summary}
-{visual_context}
+
+STYLE THIS POST: {chosen_style}
 
 SPORTS COMMENTATOR STYLE — STRICT:
+- NEWS KI STORY sunao — video sirf background hai, usse describe mat karo
 - HEADLINE BILKUL MAT PADHO — screen pe already dikh raha hai
 - ~90-100 words — exactly 30 seconds ke liye
-- Action se shuru karo — "Aur woh shot!", "Ye moment history mein darz ho gaya!", "Dekho..."
-- Player/team ko hero ki tarah present karo — unki mehnat, dedication, achievement
+- Player/team ko hero ki tarah present karo — mehnat, dedication, achievement
 - Ek shocking stat ya record — poetic style mein
 - End mein ek powerful line — fans ke liye motivation
 - Hindi dominant, English sirf proper nouns ke liye (player names, team names)
@@ -1017,7 +1027,7 @@ def process_reel(video_path: str, headline: str, summary: str,
                 ], capture_output=True, timeout=10)
                 streams = _json.loads(probe.stdout).get("streams", [{}])
                 reel_dur = float(streams[0].get("duration", 30.0))
-                reel_dur = min(reel_dur + 0.3, 58.0)
+                reel_dur = min(reel_dur + 0.3, 88.0)
                 print(f"      Audio duration: {reel_dur:.1f}s")
             except Exception:
                 reel_dur = 30.0
@@ -1430,7 +1440,7 @@ def run_agent():
                 print(f"      Source error: {e}")
 
     # DuckDuckGo fallback if few results
-    if len(all_news) < 3:
+    if len(all_news) < 5:
         for topic in SPORTS_TOPICS[:2]:
             results = fetch_news(topic, max_results=4)
             all_news.extend(results)
