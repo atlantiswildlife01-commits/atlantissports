@@ -202,7 +202,7 @@ def fetch_bbc_sport() -> list[dict]:
     return _parse_rss("https://feeds.bbci.co.uk/sport/rss.xml", "BBC Sport", 3)
 
 def fetch_bbc_cricket() -> list[dict]:
-    return _parse_rss("https://feeds.bbci.co.uk/sport/cricket/rss.xml", "BBC Cricket", 2)
+    return _parse_rss("https://feeds.bbci.co.uk/sport/cricket/rss.xml", "BBC Cricket", 3)
 
 def fetch_bbc_football() -> list[dict]:
     return _parse_rss("https://feeds.bbci.co.uk/sport/football/rss.xml", "BBC Football", 2)
@@ -211,10 +211,10 @@ def fetch_guardian_sport() -> list[dict]:
     return _parse_rss("https://www.theguardian.com/sport/rss", "Guardian Sport", 3)
 
 def fetch_ndtv_sports() -> list[dict]:
-    return _parse_rss("https://sports.ndtv.com/rss/all", "NDTV Sports", 3)
+    return _parse_rss("https://sports.ndtv.com/rss/all", "NDTV Sports", 4)
 
 def fetch_espncricinfo() -> list[dict]:
-    return _parse_rss("https://www.espncricinfo.com/rss/content/story/feeds/6.xml", "ESPNcricinfo", 3)
+    return _parse_rss("https://www.espncricinfo.com/rss/content/story/feeds/6.xml", "ESPNcricinfo", 4)
 
 def fetch_skysports() -> list[dict]:
     return _parse_rss("https://www.skysports.com/rss/0,20514,11661,00.xml", "Sky Sports", 2)
@@ -224,6 +224,22 @@ def fetch_goal_football() -> list[dict]:
 
 def fetch_athletics_world() -> list[dict]:
     return _parse_rss("https://worldathletics.org/news/rss", "World Athletics", 2)
+
+# India-focused sources — primary audience ke liye
+def fetch_toi_sports() -> list[dict]:
+    return _parse_rss("https://timesofindia.indiatimes.com/rss/sport.cms", "Times of India Sports", 4)
+
+def fetch_ht_sports() -> list[dict]:
+    return _parse_rss("https://www.hindustantimes.com/feeds/rss/sports/rssfeed.xml", "Hindustan Times Sports", 3)
+
+def fetch_sportstar() -> list[dict]:
+    return _parse_rss("https://sportstar.thehindu.com/rss/sport/feeds.rss", "Sportstar", 3)
+
+def fetch_icc_cricket() -> list[dict]:
+    return _parse_rss("https://www.icc-cricket.com/media-releases/feed/rss.xml", "ICC Cricket", 3)
+
+def fetch_olympics_news() -> list[dict]:
+    return _parse_rss("https://olympics.com/ioc/news/feed", "Olympics", 2)
 
 
 # --- History ------------------------------------------------------------------
@@ -338,7 +354,7 @@ Ye sports content hai. Visual aur excitement score do (1-10):
 - 5-6: Team selection, injury news, transfer
 - 1-4: Background/opinion piece, no visual appeal
 
-Priority: ESPNcricinfo > BBC Cricket > BBC Sport > NDTV Sports > Guardian > BBC Football > Goal.com
+Priority: ESPNcricinfo > ICC Cricket > BBC Cricket > Sportstar > NDTV Sports > TOI Sports > HT Sports > BBC Sport > Guardian > BBC Football > Goal.com
 
 {news_list_str}
 
@@ -891,9 +907,12 @@ def generate_narration(news_item: dict, headline: str, summary: str,
 
     import random as _rand
     narration_styles = [
-        "MATCH MOMENT: Seedha action mein jump karo — jaise live commentary chal rahi ho. 'Aur woh shot!', 'Ye moment history mein...'",
-        "PLAYER STORY: Player ki journey aur struggle pe focus karo — ek insaan ki kahani jo champion bana.",
-        "STAT BOMB: Ek shocking record ya fact se shuru karo, phir context do — listeners ka jaw drop ho jaye.",
+        "LIVE COMMENTARY: Seedha action mein jump karo — crowd ka shor, tension, woh exact moment. 'Aur woh shot...', 'Sirf 2 seconds bache the...'",
+        "STAT BOMB: Ek shocking number ya record se shuru karo — '93 saalon mein pehli baar...', 'Ye record 47 saal baad toota...' Jaw drop guaranteed.",
+        "PLAYER JOURNEY: Champion ki struggle story — rejection se record tak. Emotional, inspiring, viewer ko feel ho.",
+        "COMPARISON HOOK: 'Agar ye match cricket mein hota...' ya 'IPL ki poori prize money isse kam hai...' — relatable comparison se start.",
+        "TURNING POINT: Ek exact 30-second moment jo match/career badal gaya — last over, injury, substitute, referee decision.",
+        "FAN ANGLE: Viewer ko stadium mein rakh do — 'Imagine karo tum wahan the...', crowd ka josh, atmosphere, woh feeling.",
     ]
     chosen_style = _rand.choice(narration_styles)
 
@@ -965,15 +984,18 @@ def _tts_edge(text: str, out_path: str) -> bool:
         ("hi-IN-MadhurNeural", "-5%", "+0Hz", "+12%"),
         ("hi-IN-SwaraNeural",  "-5%", "-2Hz", "+15%"),
     ]
+    # Hourly rotation — har ghante ek naya voice
+    voice_idx = (int(time.time()) // 3600) % len(VOICES)
+    ordered = VOICES[voice_idx:] + VOICES[:voice_idx]
     clean = _re.sub(r'[*_`#~\[\]{}|<>\\]', '', text).strip()
-    for voice, rate, pitch, vol in VOICES:
+    for voice, rate, pitch, vol in ordered:
         try:
             comm = edge_tts.Communicate(clean, voice=voice,
                                         rate=rate, pitch=pitch, volume=vol)
             asyncio.run(comm.save(out_path))
             if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
                 _normalize_audio(out_path)
-                print(f"      TTS: {voice}")
+                print(f"      TTS: {voice} (slot {voice_idx})")
                 return True
         except Exception:
             continue
@@ -1173,10 +1195,13 @@ def process_reel(video_path: str, headline: str, summary: str,
             except: pass
 
         if result.returncode == 0 and os.path.exists(out_path):
-            size_mb = os.path.getsize(out_path) // 1024 // 1024
-            print(f"      Reel ready: {size_mb}MB {'(with audio)' if has_audio else ''}")
+            size_kb = os.path.getsize(out_path) // 1024
+            print(f"      Reel ready: {size_kb}KB {'(with audio)' if has_audio else ''}")
+            if size_kb < 10:
+                print(f"      WARNING: reel too small ({size_kb}KB) — skip")
+                return None
             return out_path
-        print(f"      FFmpeg error: {result.stderr[-150:].decode(errors='ignore')}")
+        print(f"      FFmpeg error: {result.stderr[-200:].decode(errors='ignore')}")
     except Exception as e:
         print(f"      Reel process error: {e}")
     return None
@@ -1184,48 +1209,32 @@ def process_reel(video_path: str, headline: str, summary: str,
 
 # --- GitHub Video Upload ------------------------------------------------------
 def upload_video_github(video_path: str) -> str | None:
+    """GitHub Contents API — reliable upload (same as wildlife agent)"""
+    import base64
     gh_token = (os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
-    repo = os.getenv("GITHUB_REPOSITORY")
+    repo     = os.getenv("GITHUB_REPOSITORY", "")
     if not gh_token or not repo:
+        print("      GitHub token ya repo missing")
         return None
-    headers = {
-        "Authorization": f"token {gh_token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    filename = f"sports_reel_{int(time.time())}.mp4"
     try:
-        releases = requests.get(
-            f"https://api.github.com/repos/{repo}/releases",
-            headers=headers, timeout=10
-        ).json()
-        upload_url = None
-        for rel in (releases if isinstance(releases, list) else []):
-            if rel.get("tag_name") == "media-assets":
-                upload_url = rel["upload_url"].split("{")[0]
-                break
-        if not upload_url:
-            create = requests.post(
-                f"https://api.github.com/repos/{repo}/releases",
-                headers=headers,
-                json={"tag_name": "media-assets", "name": "Media Assets",
-                      "draft": False, "body": "Auto-generated sports reels"},
-                timeout=10
-            ).json()
-            upload_url = create.get("upload_url", "").split("{")[0]
-        if not upload_url:
-            return None
-        size_mb = os.path.getsize(video_path) // 1024 // 1024
-        print(f"      GitHub upload ({size_mb}MB)...")
         with open(video_path, "rb") as f:
-            up = requests.post(
-                f"{upload_url}?name={filename}",
-                headers={**headers, "Content-Type": "video/mp4"},
-                data=f, timeout=300
-            ).json()
-        url = up.get("browser_download_url", "")
+            content = base64.b64encode(f.read()).decode()
+        filename = f"sports_reel_{int(time.time())}.mp4"
+        api_url  = f"https://api.github.com/repos/{repo}/contents/reels/{filename}"
+        size_kb  = os.path.getsize(video_path) // 1024
+        print(f"      GitHub upload ({size_kb}KB)...")
+        resp = requests.put(
+            api_url,
+            headers={"Authorization": f"token {gh_token}",
+                     "Content-Type": "application/json"},
+            json={"message": f"reel: {filename}", "content": content, "branch": "main"},
+            timeout=300
+        )
+        url = resp.json().get("content", {}).get("download_url")
         if url:
-            print(f"      Video URL: {url[:80]}")
+            print(f"      GitHub URL: {url[:80]}")
             return url
+        print(f"      GitHub upload error: {resp.json()}")
     except Exception as e:
         print(f"      GitHub upload error: {e}")
     return None
@@ -1424,10 +1433,15 @@ def run_agent():
         fetch_skysports,
         fetch_goal_football,
         fetch_athletics_world,
+        fetch_toi_sports,
+        fetch_ht_sports,
+        fetch_sportstar,
+        fetch_icc_cricket,
+        fetch_olympics_news,
     ]
 
     print("\n[Fetch] Parallel fetching all sports sources...")
-    with ThreadPoolExecutor(max_workers=9) as ex:
+    with ThreadPoolExecutor(max_workers=14) as ex:
         rss_futures = {ex.submit(fn): fn.__name__ for fn in rss_sources}
         for fut in as_completed(rss_futures):
             try:
