@@ -1036,10 +1036,20 @@ def _normalize_audio(path: str) -> None:
 
 def _tts_edge(text: str, out_path: str) -> bool:
     import asyncio, edge_tts, re as _re
+    try:
+        # kuch systems pe aiodns broken hota hai — system DNS resolver force karo
+        import aiohttp.resolver, aiohttp.connector
+        aiohttp.resolver.DefaultResolver = aiohttp.resolver.ThreadedResolver
+        aiohttp.connector.DefaultResolver = aiohttp.resolver.ThreadedResolver
+    except Exception:
+        pass
+    # Verified working voices (AnanyaNeural Edge TTS pe exist nahi karti — hata di)
     VOICES = [
-        ("hi-IN-AnanyaNeural", "-3%", "-1Hz", "+15%"),
-        ("hi-IN-MadhurNeural", "-5%", "+0Hz", "+12%"),
-        ("hi-IN-SwaraNeural",  "-5%", "-2Hz", "+15%"),
+        ("en-IN-NeerjaExpressiveNeural", "-2%", "+0Hz", "+15%"),  # female, energetic — sports feel
+        ("hi-IN-MadhurNeural",           "-5%", "+0Hz", "+12%"),  # male, deep Hindi
+        ("hi-IN-SwaraNeural",            "-4%", "-2Hz", "+15%"),  # female, clear Hindi
+        ("en-IN-PrabhatNeural",          "-4%", "+0Hz", "+15%"),  # male, crisp
+        ("en-IN-NeerjaNeural",           "-3%", "+0Hz", "+15%"),  # female, smooth
     ]
     # Hourly rotation — har ghante ek naya voice
     voice_idx = (int(time.time()) // 3600) % len(VOICES)
