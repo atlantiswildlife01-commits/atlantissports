@@ -288,7 +288,7 @@ def load_posted_images() -> set:
     return set()
 
 
-def save_posted_title(title: str, image_url: str = "", keyword: str = "") -> None:
+def save_posted_title(title: str, image_url: str = "", keyword: str = "", video_id: str = "") -> None:
     try:
         import subprocess
         repo_dir = os.path.dirname(os.path.abspath(__file__))
@@ -323,8 +323,14 @@ def save_posted_title(title: str, image_url: str = "", keyword: str = "") -> Non
                 keywords.append(kw_key)
             keywords = keywords[-150:]
 
+        videos = existing.get("videos", [])
+        if video_id and video_id not in videos:
+            videos.append(video_id)
+        videos = videos[-200:]
+
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump({"titles": titles, "images": images, "keywords": keywords,
+                       "videos": videos,
                        "updated": datetime.now().isoformat()}, f, ensure_ascii=False, indent=2)
 
         subprocess.run(["git", "add", "posted_history.json"], cwd=repo_dir)
@@ -348,6 +354,22 @@ def load_posted_keywords() -> set:
     except Exception:
         pass
     return set()
+
+
+def load_posted_videos() -> set:
+    """Pehle use hui stock/YouTube videos ke IDs — same visuals repeat na hon"""
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return set(data.get("videos", []))
+    except Exception:
+        pass
+    return set()
+
+
+USED_VIDEO_IDS: set = set()   # run start pe history se load hota hai
+LAST_VIDEO_ID  = ""           # jo video final use hui uska id (history mein save hota hai)
 
 
 def get_recently_posted_titles() -> set:
@@ -825,13 +847,19 @@ def fetch_pixabay_video(keyword: str) -> tuple[str | None, str]:
         hits = r.json().get("hits", [])
         import random
         random.shuffle(hits)
-        for hit in hits[:5]:
+        global LAST_VIDEO_ID
+        for hit in hits[:8]:
+            vid_key = f"pixabay:{hit.get('id')}"
+            if vid_key in USED_VIDEO_IDS:
+                continue   # ye video pehle use ho chuki — skip
             videos = hit.get("videos", {})
             for quality in ("large", "medium", "small"):
                 url = videos.get(quality, {}).get("url", "")
                 if url:
                     path = _download_video(url, "pixabay")
                     if path:
+                        LAST_VIDEO_ID = vid_key
+                        USED_VIDEO_IDS.add(vid_key)
                         print(f"      Pixabay video: id={hit.get('id')}")
                         return path, keyword
     except Exception as e:
@@ -845,14 +873,20 @@ def fetch_pexels_video(keyword: str) -> tuple[str | None, str]:
         return None, ""
     try:
         headers = {"Authorization": PEXELS_API_KEY}
+        import random
+        global LAST_VIDEO_ID
         for orientation in ("portrait", "landscape"):
             resp = requests.get(
                 "https://api.pexels.com/videos/search",
-                params={"query": keyword, "per_page": 10, "orientation": orientation},
+                params={"query": keyword, "per_page": 15, "orientation": orientation},
                 headers=headers, timeout=10
             )
             videos = resp.json().get("videos", [])
+            random.shuffle(videos)   # har baar same pehla video na aaye
             for video in videos:
+                vid_key = f"pexels:{video.get('id')}"
+                if vid_key in USED_VIDEO_IDS:
+                    continue   # ye video pehle use ho chuki — skip
                 title = video.get("url", "").rstrip("/").split("/")[-1].replace("-", " ")
                 for vf in sorted(video.get("video_files", []),
                                  key=lambda x: x.get("height", 0), reverse=True):
@@ -860,11 +894,77 @@ def fetch_pexels_video(keyword: str) -> tuple[str | None, str]:
                         url  = vf["link"]
                         path = _download_video(url, "pexels")
                         if path:
+                            LAST_VIDEO_ID = vid_key
+                            USED_VIDEO_IDS.add(vid_key)
                             print(f"      Pexels: {title[:50]}")
                             return path, title or keyword
     except Exception as e:
         print(f"      Pexels video error: {e}")
     return None, ""
+
+
+def fetch_youtube_cc_video(keyword: str) -> tuple[str | None, str]:
+    """YouTube Creative Commons — sirf CC-license; broadcast/highlights clips skip (copyright-safe)"""
+    global LAST_VIDEO_ID
+    import subprocess, urllib.parse, random, re as _re
+    # Broadcast content ke indicators — aisi videos CC-marked ho ke bhi risky hoti hain
+    BAD = _re.compile(
+        r"\bvs\b|highlight|full match|final|world cup|ipl|live|news|interview|"
+        r"press|controversy|anger|fight|episode|20\d\d|espn|star sports|sony",
+        _re.I
+    )
+    try:
+        # sp=EgIwAQ%253D%253D = YouTube ka Creative Commons license filter
+        url = ("https://www.youtube.com/results?search_query="
+               + urllib.parse.quote(keyword) + "&sp=EgIwAQ%253D%253D")
+        r = subprocess.run(
+            ["yt-dlp", url, "--flat-playlist", "--playlist-items", "1-10",
+             "-J", "--quiet", "--no-warnings"],
+            capture_output=True, text=True, timeout=60
+        )
+        entries = json.loads(r.stdout or "{}").get("entries", []) or []
+        random.shuffle(entries)
+        for e in entries:
+            dur   = e.get("duration") or 0
+            title = e.get("title") or ""
+            vid   = e.get("id", "")
+            if not (12 <= dur <= 300) or BAD.search(title) or f"yt:{vid}" in USED_VIDEO_IDS:
+                continue
+            path = _yt_dlp(f"https://www.youtube.com/watch?v={vid}", "sytcc")
+            if path:
+                LAST_VIDEO_ID = f"yt:{vid}"
+                USED_VIDEO_IDS.add(LAST_VIDEO_ID)
+                channel = e.get("channel") or e.get("uploader") or "YouTube"
+                print(f"      YouTube CC: {title[:50]} | {channel}")
+                return path, title[:80]
+    except Exception as ex:
+        print(f"      YouTube CC error: {ex}")
+    return None, ""
+
+
+def fetch_pexels_photo(keyword: str) -> str | None:
+    """Fresh Pexels photo — jab news ki image duplicate/missing ho (photo post variety)"""
+    if not PEXELS_API_KEY:
+        return None
+    try:
+        import random
+        r = requests.get(
+            "https://api.pexels.com/v1/search",
+            params={"query": keyword, "per_page": 15, "orientation": "portrait"},
+            headers={"Authorization": PEXELS_API_KEY}, timeout=10
+        )
+        photos = r.json().get("photos", [])
+        random.shuffle(photos)
+        recent = load_posted_images()
+        for p in photos:
+            src = p.get("src", {})
+            url = src.get("large2x") or src.get("large") or ""
+            if url and url.strip()[:120] not in recent:
+                print(f"      Pexels photo: fresh image mili")
+                return url
+    except Exception as e:
+        print(f"      Pexels photo error: {e}")
+    return None
 
 
 def fetch_article_video(article_url: str) -> str | None:
@@ -899,8 +999,11 @@ def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") ->
       3. Pixabay    (CC0, good keyword matching)
       4. Wikimedia  (CC-licensed sports footage)
       5. Archive.org (CC0 sports documentaries)
-      6. Last resort: Pexels + Archive with generic "sports" keyword
+      6. YouTube CC (strict filter — sports broadcast clips risky, isliye last)
+      7. Last resort: Pexels + Archive with generic "sports" keyword
     """
+    global LAST_VIDEO_ID
+    LAST_VIDEO_ID = ""   # har naye fetch pe reset
     print(f"\n      [Video] '{keyword}' | source: {source}")
 
     # 1. Article direct MP4
@@ -939,6 +1042,13 @@ def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") ->
     # 5. Internet Archive — sports documentaries
     print(f"      Trying Internet Archive...")
     path, title = fetch_archive_video(keyword)
+    if path:
+        return path, title or keyword
+
+    # 6. YouTube Creative Commons — sports mein risky (broadcast clips galat CC-mark hote
+    #    hain), isliye sabse aakhri asli source; strict filter ke saath
+    print(f"      Trying YouTube CC (strict filter)...")
+    path, title = fetch_youtube_cc_video(keyword)
     if path:
         return path, title or keyword
 
@@ -1541,6 +1651,7 @@ def run_agent():
     recent_titles   = get_recently_posted_titles()
     recent_images   = load_posted_images()
     recent_keywords = load_posted_keywords()
+    USED_VIDEO_IDS.update(load_posted_videos())   # pehle use hui videos repeat na hon
     all_news = [
         n for n in all_news
         if not is_duplicate(n.get("title", ""), recent_titles)
@@ -1602,10 +1713,16 @@ def run_agent():
                 if video_url:
                     media_id = post_reel(video_url, caption)
 
+        used_image = news.get("image", "")
         if not media_id:
                 print("      Reel fail — photo post pe fallback")
+                # News ki image duplicate/missing ho to fresh Pexels photo lo
+                if not used_image or is_image_duplicate(used_image, recent_images):
+                    fresh = fetch_pexels_photo(keyword)
+                    if fresh:
+                        used_image = fresh
                 img_url = add_watermark(
-                    news.get("image"),
+                    used_image,
                     title=headline,
                     source=news.get("source", ""),
                     summary=summary
@@ -1614,7 +1731,8 @@ def run_agent():
                     media_id = post_to_instagram(img_url, caption)
 
         if media_id:
-            save_posted_title(news.get("title", ""), image_url=news.get("image", ""), keyword=keyword)
+            save_posted_title(news.get("title", ""), image_url=used_image,
+                              keyword=keyword, video_id=LAST_VIDEO_ID)
             time.sleep(8)
             auto_first_comment(media_id, hashtags)
             print(f"      Post ho gaya!")
