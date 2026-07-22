@@ -57,6 +57,27 @@ def _pick_groq_model() -> str:
 GROQ_MODEL = _pick_groq_model()
 print(f"🧠 Groq model: {GROQ_MODEL}")
 
+
+def _groq_complete(messages, max_tokens=500, **kwargs):
+    """Groq call — rate limit (429) pe agle model pe switch karo.
+    Groq ke daily token limits PER MODEL hote hain (saare agents ek hi key share
+    karte hain, isliye 70b ka limit din mein khatam ho jata hai)."""
+    client = Groq(api_key=GROQ_API_KEY)
+    models = [GROQ_MODEL] + [m for m in GROQ_MODEL_PREFERENCES if m != GROQ_MODEL]
+    last_err = None
+    for m in models:
+        try:
+            return client.chat.completions.create(
+                model=m, max_tokens=max_tokens, messages=messages, **kwargs
+            )
+        except Exception as e:
+            last_err = e
+            if "rate_limit" in str(e) or "429" in str(e):
+                print(f"      {m} rate-limited — agla model try kar raha hoon")
+                continue
+            raise
+    raise last_err
+
 CHANNEL_HANDLE  = "@atlantis_sports"
 POST_DELAY      = 20
 CAROUSEL_SLIDES = 1
@@ -423,9 +444,7 @@ def smart_plan(all_news: list[dict], count: int = CAROUSEL_SLIDES) -> list[dict]
         for i, n in enumerate(all_news[:12])
     ])
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+        resp = _groq_complete(
             max_tokens=500,
             messages=[{"role": "user", "content": f"""
 Ye sports content hai. Visual aur excitement score do (1-10):
@@ -465,7 +484,6 @@ TOP {count} choose karo. JSON:
 # --- Caption Generation -------------------------------------------------------
 def generate_caption(news_item: dict) -> dict:
     print(f"\n[Caption] Generate kar raha hoon...")
-    client = Groq(api_key=GROQ_API_KEY)
     import random as _rand
     caption_styles = [
         "LIVE COMMENTARY: Jaise match abhi chal raha ho — real-time energy. 'Aur woh shot!', 'Crowd ki saans ruki hui hai...', 'Ye moment history mein darz ho gaya!'",
@@ -500,8 +518,7 @@ JSON:
 }}
 """
     try:
-        message = client.chat.completions.create(
-            model=GROQ_MODEL,
+        message = _groq_complete(
             max_tokens=900,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
@@ -1105,11 +1122,7 @@ def generate_narration(news_item: dict, headline: str, summary: str,
     chosen_style = _rand.choice(narration_styles)
 
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=GROQ_MODEL,
-            max_tokens=420,
-            messages=[{"role": "user", "content": f"""
+        resp = _groq_complete(max_tokens=420, messages=[{"role": "user", "content": f"""
 Tu ek passionate Hindi sports commentator hai — jaise Ravi Shastri ya Harsha Bhogle ka Hindi version.
 Ek 30-second sports Reel narration likho — energetic, dramatic, awe-inspiring.
 
@@ -1131,17 +1144,30 @@ SPORTS COMMENTATOR STYLE — STRICT:
 - "..." = dramatic pause — use karo wisely
 - Sirf bolne wala text — koi heading, bullet, asterisk nahi
 
-Narration:"""}]
-        )
+Narration:"""}])
         narration = resp.choices[0].message.content.strip()
         import re
         narration = re.sub(r'\*+', '', narration).strip()
-        wc = len(narration.split())
-        print(f"      Narration ({wc} words, commentator style)")
-        return narration
+        words = narration.split()
+        if len(words) > 110:                      # 80s+ ki boring reel se bachao
+            narration = " ".join(words[:110]) + "."
+        if len(words) >= 20:
+            print(f"      Narration ({len(narration.split())} words, commentator style)")
+            return narration
+        print(f"      Narration bahut chhoti ({len(words)} words) — fallback")
     except Exception as e:
         print(f"      Narration error: {e}")
-        return summary
+
+    # Fallback — AI fail ho to bhi bolne layak text bane, warna reel silent ho jati hai
+    parts, seen = [], set()
+    for p in (headline, summary, (news_item.get("body", "") or "")[:400]):
+        p = (p or "").strip()
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            parts.append(p if p.endswith((".", "!", "?")) else p + ".")
+    fallback = " ".join(parts)[:900]
+    print(f"      Fallback narration ({len(fallback.split())} words)")
+    return fallback
 
 
 # --- TTS (same as wildlife — AnanyaNeural primary) ----------------------------
