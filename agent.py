@@ -972,6 +972,7 @@ def fetch_youtube_cc_video(keyword: str) -> tuple[str | None, str]:
                 LAST_VIDEO_ID = f"yt:{vid}"
                 USED_VIDEO_IDS.add(LAST_VIDEO_ID)
                 channel = e.get("channel") or e.get("uploader") or "YouTube"
+                globals()["LAST_VIDEO_CREDIT"] = f"{channel} (YouTube CC)"
                 print(f"      YouTube CC: {title[:50]} | {channel}")
                 return path, title[:80]
     except Exception as ex:
@@ -1028,9 +1029,90 @@ def fetch_article_video(article_url: str) -> str | None:
     return None
 
 
+# --- Video Queue: laptop se aayi YouTube CC footage (CI pe YouTube blocked hai) ---
+QUEUE_DIR = "video_queue"
+LAST_QUEUE_ITEM   = ""
+LAST_VIDEO_CREDIT = ""   # queued YouTube CC ka channel credit (reel overlay ke liye)
+
+
+def _queue_repo_token():
+    tok  = (os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    return (tok, repo) if (tok and repo) else (None, None)
+
+
+def fetch_queued_video() -> tuple[str | None, str]:
+    """Laptop ne YouTube CC se jo footage queue ki hai wahan se lo (already strict-filter vetted)."""
+    global LAST_QUEUE_ITEM, LAST_VIDEO_ID, LAST_VIDEO_CREDIT
+    tok, repo = _queue_repo_token()
+    if not tok:
+        return None, ""
+    hdr = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(f"https://api.github.com/repos/{repo}/contents/{QUEUE_DIR}",
+                         headers=hdr, timeout=30)
+        if r.status_code != 200:
+            return None, ""
+        vids = sorted([f for f in r.json() if f["name"].endswith(".mp4")],
+                      key=lambda f: f["name"])
+        if not vids:
+            return None, ""
+        item = vids[0]
+        dl = requests.get(item["download_url"], timeout=180, stream=True)
+        path = os.path.join(tempfile.gettempdir(), f"queued_{item['name']}")
+        with open(path, "wb") as f:
+            for chunk in dl.iter_content(8192):
+                f.write(chunk)
+        if os.path.getsize(path) < 200_000:
+            os.remove(path)
+            return None, ""
+        LAST_QUEUE_ITEM = item["name"]
+        title = ""
+        try:
+            stem = item["name"].rsplit(".", 1)[0]
+            mr = requests.get(f"https://raw.githubusercontent.com/{repo}/main/{QUEUE_DIR}/{stem}.json",
+                              timeout=20)
+            if mr.status_code == 200:
+                meta = mr.json()
+                title = meta.get("title", "")
+                LAST_VIDEO_ID     = meta.get("video_id", "")
+                LAST_VIDEO_CREDIT = meta.get("credit", "")
+        except Exception:
+            pass
+        print(f"      [Queue] {item['name']} — {title[:50]}")
+        return path, title
+    except Exception as e:
+        print(f"      [Queue] error: {e}")
+    return None, ""
+
+
+def delete_queued_video() -> None:
+    global LAST_QUEUE_ITEM
+    if not LAST_QUEUE_ITEM:
+        return
+    tok, repo = _queue_repo_token()
+    if not tok:
+        return
+    hdr = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+    stem = LAST_QUEUE_ITEM.rsplit(".", 1)[0]
+    for name in (LAST_QUEUE_ITEM, f"{stem}.json"):
+        try:
+            meta = requests.get(f"https://api.github.com/repos/{repo}/contents/{QUEUE_DIR}/{name}",
+                                headers=hdr, timeout=30).json()
+            if "sha" in meta:
+                requests.delete(f"https://api.github.com/repos/{repo}/contents/{QUEUE_DIR}/{name}",
+                                headers=hdr, timeout=30,
+                                json={"message": f"queue: {name} posted", "sha": meta["sha"]})
+        except Exception:
+            pass
+    print(f"      [Queue] {LAST_QUEUE_ITEM} hata di")
+    LAST_QUEUE_ITEM = ""
+
+
 def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") -> tuple[str | None, str]:
     """
     Video priority — specific AI keyword used throughout, NO source override.
+      0. Queue      (laptop se aayi YouTube CC footage — pre-vetted, CI pe YouTube blocked)
       1. Article direct MP4
       2. Pexels     (best keyword relevance — specific sport + action)
       3. Pixabay    (CC0, good keyword matching)
@@ -1039,9 +1121,16 @@ def fetch_sports_video(keyword: str, source: str = "", article_url: str = "") ->
       6. YouTube CC (strict filter — sports broadcast clips risky, isliye last)
       7. Last resort: Pexels + Archive with generic "sports" keyword
     """
-    global LAST_VIDEO_ID
-    LAST_VIDEO_ID = ""   # har naye fetch pe reset
+    global LAST_VIDEO_ID, LAST_QUEUE_ITEM, LAST_VIDEO_CREDIT
+    LAST_VIDEO_ID = ""       # har naye fetch pe reset
+    LAST_QUEUE_ITEM = ""
+    LAST_VIDEO_CREDIT = ""
     print(f"\n      [Video] '{keyword}' | source: {source}")
+
+    # 0. Queue — laptop se aayi YouTube CC footage (purane sources se pehle)
+    qpath, qtitle = fetch_queued_video()
+    if qpath:
+        return qpath, qtitle or keyword
 
     # 1. Article direct MP4
     if article_url:
@@ -1736,7 +1825,7 @@ def run_agent():
 
         if video_path:
             reel_path = process_reel(video_path, headline, summary, narration,
-                                     source=news.get("source", ""))
+                                     source=(LAST_VIDEO_CREDIT or news.get("source", "")))
             try:
                 os.remove(video_path)
             except:
@@ -1777,6 +1866,7 @@ def run_agent():
                     media_id = post_to_instagram(img_url, caption)
 
         if media_id:
+            delete_queued_video()   # queue se aayi thi to hatao — dobara post na ho
             save_posted_title(news.get("title", ""), image_url=used_image,
                               keyword=keyword, video_id=LAST_VIDEO_ID)
             time.sleep(8)
